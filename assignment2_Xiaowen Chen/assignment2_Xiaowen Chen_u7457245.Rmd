@@ -1,0 +1,387 @@
+---
+title: "assignment2_Xiaowen Chen"
+author: "Xiaowen Chen u7457245"
+date: "10/31/2022"
+output: html_document
+---
+
+## [My GitHub Repository]（https://github.com/XiaowenChen0819/Assignment2.git）
+
+### Load the necessary R Packages:
+
+```{r,results='hide'}
+# Data processing:
+library(tidyverse)
+library(readr)
+library(dplyr)
+library(plotrix)
+```
+
+```{r}
+# Meta_analysis:
+library(pacman)
+pacman::p_load(metafor, orchaRd)
+devtools::install_github("daniel1noble/orchaRd", force = TRUE)
+p_load(bookdown, devtools, tidyverse, ggforce, GGally, flextable, latex2exp, png,
+    magick, metafor, MASS, emmeans, R.rsp)
+library(orchaRd)
+```
+
+### Read the files:
+
+```{r}
+data <- read.csv("OA_activitydat_20190302_BIOL3207.csv")
+paper <- read.csv("clark_paper_data.csv")
+meta <- read.csv("ocean_meta_data.csv")
+```
+
+```{r}
+# Drop irrelevant columns 'loc' and 'comment':
+data_clean <- subset(data,select = -c(loc, comment))
+# Remove the missing data, which reflected by 'NA';
+data_eff <- data_clean %>% filter(!is.na(activity)) %>% filter(animal_id > 0, activity > 0)
+head(data_eff)
+```
+
+```{r}
+# Check spelling in species and treatment:
+data_eff$species %>% unique()
+data_eff$treatment %>% unique()
+```
+
+```{r}
+# Upon inspection, there were indeed six species and two treatments, so we did not need to change them
+```
+
+
+```{r}
+data_ctrl <- data_eff %>% filter(treatment=="control")
+data_oa <- data_eff %>% filter(treatment=="CO2")
+```
+
+### 1.Correct analysis of Clark et al. (2020) data (i.e., OA_activitydat_20190302_BIOL3207.csv) to generate the summary statistics (means, SD, N) for each of the fish species’ average activity for each treatment.
+
+```{r}
+# Control: 
+data1 <- data_ctrl %>% group_by(species) %>% summarize(ctrl.mean = mean(activity), ctrl.sd = sd(activity), ctrl.n = length(species))
+data1
+```
+
+```{r}
+# CO2: 
+data2 <- data_oa %>% group_by(species) %>% summarize(oa.mean = mean(activity), oa.sd = sd(activity), oa.n = length(species))
+data2
+```
+
+```{r}
+# Merge the summary statistics for the following processing:
+data_1 <- merge(data1,data2)
+data_1
+```
+
+###  2.Through coding, merge the summary statistics generated from 1) with the metadata (i.e., clark_paper_data.csv) from Clark et al. (2020).
+
+```{r}
+# Use 'merge' function to merge 'data_1' with 'paper'.
+data_2 <- merge(paper,data_1)
+data_2
+```
+
+###  3.Through coding, correctly merge the combined summary statistics and metadata from Clark et al. (2020) (output from 1 & 2) into the larger meta-analysis dataset (i.e., ocean_meta_data.csv).
+
+```{r}
+# Use 'rbind()' function to merge 'data_2' with 'meta':
+# We found that there were outliers in these two data, which were removed for the convenience of subsequent analysis：
+data_3 <- rbind(meta %>% janitor::clean_names(),data_2 %>% janitor::clean_names())
+data_3$residual <- 1:dim(data_3)[1]
+summary(data_3)
+data_4 <- data_3 %>% filter(!is.na(oa_mean)) %>% filter(!is.na(oa_sd))
+summary(data_4)
+```
+
+### 4.Correctly calculate the log response ratio (lnRR) effect size for every row of the dataframe using metafor’s escalc() function.
+
+```{r}
+data_complete <- data_4 %>% filter(ctrl_mean>0,ctrl_n>0,ctrl_sd>0,oa_n>0,oa_mean>0,oa_sd>0)
+data_lnRR <- escalc(measure="ROM", m1i=ctrl_mean, m2i=oa_mean, sd1i=ctrl_sd, sd2i=oa_sd, n1i=ctrl_n, n2i=oa_n,data=data_complete)
+str(data_lnRR)
+# The yi in the table right here represents the value of the  lnRR
+```
+
+### 5.Correct meta-analytic model fitted to the data that controls for the sampling variance of lnRR. The model should include a random effect of study and observation. Use metafor’s rma.mv() function.
+
+```{r}
+# Multiple-level meta-analytic model:
+data_v <- metafor::rma.mv(yi, vi, 
+                   method="REML",
+                   random=list(~1|study,
+                               ~1|residual), 
+                   dfs = "contain",
+                   test="t",
+                   data=data_lnRR)
+summary(data_v)
+```
+
+### 6.Written paragraph of the findings and what they mean which is supported with a figure. The paragraph should include:
+Correct presentation and interpretation of overall meta-analytic mean and measures of uncertainty around the mean estimate (e.g., 95% confidence intervals).
+
+#### Correct presentation and interpretation of overall meta-analytic mean and measures of uncertainty around the mean estimate (e.g., 95% confidence intervals).
+
+
+```{r}
+# Overall meta-analytic mean:
+# From the model by extracting the intercept (labeled estimate in the model output), we can know what the overall meta-analytic mean effect size across the studies actually is estimated to be. And the model is just an object that stores all the values for us.
+# We can extract the estimate using the coef function, it is estimated to be -0.1424, which tells us that the mean yi value is negative, and there is a rather weak overall association between physiology and dispersal / movement when we pool across all studies.
+```
+
+```{r}
+# Use transformation 'rma': convert the overall meta-analytic mean back to the correlation coefficient.
+predict(data_v, transf = "transf.rma")
+```
+
+```{r}
+# Uncertainty in the overall meta-analytic mean:
+# 95% confidence intervals are important to provide and they are stored in the data_v object as ci.lb and ci.up. We can extract the 95% confidence intervals in the table which range from -0.3713 to 0.0865, that is, 95% of the time we would expect the true mean to fall between yi values of -0.3713 to 0.0865. And if we were to repeat the experiment many times, 95% of the confidence intervals constructed would contain the true meta-analytic mean.
+```
+
+
+#### Measures of heterogeneity in effect size estimates across studies (i.e., I2 and/or prediction intervals - see predict() function in metafor)
+
+```{r, het, tab.cap = "Total effect size hetereogneity (Total), as well as the proportion of hetereogeneity in effects resulting from Study and Residual / Observational" }
+# I2 measurement:
+# Calculate I2:
+i2_vals <- orchaRd::i2_ml(data_v)
+
+# Clean up the names of the different I2 estimates and use some regular expressions to fix that. And use 'firstup()' to make the first letter of what is left 'type' capitalised.
+i2 <- tibble(type = firstup(gsub("I2_", "", names(i2_vals))), I2 = i2_vals)
+
+# Use 'flextable' to make a pretty table.
+flextable(i2) %>%
+    align(part = "header", align = "center") %>%
+    compose(part = "header", j = 1, value = as_paragraph(as_b("Type"))) %>%
+    compose(part = "header", j = 2, value = as_paragraph(as_b("I"), as_b(as_sup("2")),
+        as_b("(%)"))) %>% autofit(add_h = 0.5, part = c("body", "header"))
+```
+
+```{r}
+# According to the I2 of total, we can conclude that we have highly heterogeneous effect size data because sampling variation.
+# From the multi-level meta-analytic model we find that only 10.32165% of the total variation in effect size estimates is the result of differences between studies.
+```
+
+```{r}
+# Prediction intervals measurement:
+predict(data_v)
+```
+
+```{r}
+# The prediction intervals are labelled pi.lb (lower bound) and pi.ub (upper bound), in this model, the prediction intervals are range from -4.4203 to 4.1354. It means 95% prediction intervals are wide. Effect sizes are expected to range from -4.4203 to 4.1354 95% of the time with repeated experiments, suggesting a lot of inconsistency between studies.
+```
+
+#### Forest plot showing the mean estimate, 95% confidence interval, and prediction interval with clearly labelled axes, number of samples and studies plotted on figure
+
+```{r rochard, fig.cap= "Orchard plot showing the correlation coefficients estimated in the intrcpt. k = the number of effect sizes and the number of studies are in brackets. The size of the effect is scaled by the precision of each effect size value, which is 1 / sqrt(vir)"}
+# Make an orchard plot using the model object, and the orchard plot improved from the forest plot.
+orchaRd::orchard_plot(data_v, mod = "1", group = "study", data = data_lnRR,
+    xlab = "Correlation Coefficient", angle = 45)
+
+```
+
+```{r}
+# The orchard plot as a variant on the classic forest plot, cultivated to the needs of meta‐analysts in ecology and evolution, showing the mean for correlation coefficients estimated between physiology and activity, dispersal and behavior. The size of the effect is scaled by the precision of each effect size value, there are more numbers in the middle distribution, which is less accurate.
+```
+
+### 7.Funnel plot for visually assessing the possibility of publication bias.
+
+```{r}
+# Use 'fuunel()' function to draw funnel plot:
+metafor::funnel(x = data_lnRR$yi, vi = data_lnRR$vi,yaxis = "seinv",
+    digits = 2, level = c(0.1, 0.05, 0.01), shade = c("white", "gray55", "gray 75"),
+    las = 1, xlab = "Correlation Coefficient (r)", atransf = tanh, legend = TRUE)
+# Because we find there are some very high values, so we need to remove them:
+# Because the we need the data about '1-sqrt(vi)',so there is a negative correlation, so we need to remove some lowest values.
+data_lnRRr <- subset(data_lnRR, vi!=min(data_lnRR$vi))
+data_lnRRc <- subset(data_lnRRr, vi!=min(data_lnRRr$vi))
+data_lnRRd <- subset(data_lnRRc, vi!=min(data_lnRRc$vi))
+data_lnRRe <- subset(data_lnRRd, vi!=min(data_lnRRd$vi))
+data_lnRRf <- subset(data_lnRRe, vi!=min(data_lnRRe$vi))
+```
+
+```{r  funnel, echo=TRUE, fig.align='center', fig.cap= "Funnel plot depicting the correlation between metabolism and fitness as a function of precision (1 / SE). The dotted lines are the theoretical 95% sampling variance intervals - the interval with which we expect effect size estimates to fall within if only sampling variance drives differences in effects. Shaded regions represent the p-value of studies. The white region indicates studies where the p-value is between 0.1 and 1; dark gray where the p-value of studies is between 0.05 and 0.1 and the lighter gray regions where the p-value of studies is significant." }
+# Check and recreate the figure:
+metafor::funnel(x = data_lnRRf$yi, vi = data_lnRRf$vi, yaxis = "seinv",
+    digits = 3, level = c(0.1, 0.05, 0.01), shade = c("white", "gray55", "gray 75"),
+    xlab = "Correlation Coefficient (r)", xlim=c(-5,5),atransf = tanh, legend = TRUE, main = "Funnel plot")
+
+# Reduce x range
+metafor::funnel(x = data_lnRRf$yi, vi = data_lnRRf$vi, yaxis = "seinv",
+    digits = 3, level = c(0.1, 0.05, 0.01), shade = c("white", "gray55", "gray 75"),col="orange",
+    xlab = "Correlation Coefficient (r)", xlim=c(-1,1), atransf = tanh, legend = TRUE, main = "Funnel plot")
+```
+
+```{r}
+# Here's another way to do it, which is to just give you the axis range.
+metafor::funnel(x = data_lnRRf$yi, vi = data_lnRRf$vi, yaxis = "seinv",
+    digits = 3, level = c(0.1, 0.05, 0.01), shade = c("white", "gray55", "gray 75"),col="purple",
+    xlab = "Correlation Coefficient (r)", xlim=c(-5,5), ylim=c(1,150),atransf = tanh, legend = TRUE, main = "Funnel plot")
+```
+
+```{r, ggplotfunnel, fig.align='center', fig.cap="Funnel plot showing the precision of effects against their correlation"}
+# Use 'ggplot' to draw a simple funnel plot:
+ggplot(data_lnRRf, aes(y = 1/sqrt(vi), x = tanh(yi))) + geom_point() + geom_vline(aes(xintercept = 0)) + labs(y = "Precision (1/SE)", x = "Correlation Coefficient (r)") + theme_bw() +ggtitle("Funnel plot showing the precision of effects against correlation") +theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# As we can see, there is a clear blank area in the lower right corner, and the positive correlation is based on very small sample sizes, which are usually medium to small in unpublished cases. The contour enhanced funnel plot also tells us that these studies failed to find significant associations. We also see that these can be published even with small sample sizes if the magnitude of positivity is large enough in the positive direction, but in most cases these are significant at 0.05. This may suggest that results that are arguably "surprising" are more likely to be published if the correlations people estimate are sufficiently large, and if these correlations are contrary to what one would expect, than if the correlations are weak and in the opposite direction.
+```
+
+
+#### Fitting a Multilevel Meta-Regression model to Test and Correct for Publication bias:
+
+```{r, egger, fig.align='center',fig.cap= "Plot of lnRR against sampling variance for Zr. A linear model was fit to the data."}
+# Use 'ggplot' to fit a multilevel meta-regression model:
+ggplot(data_lnRR, aes(y = yi, x = vi)) + 
+  geom_point() + 
+  geom_smooth(method = lm) + 
+  labs(y = "Correlation Coefficient", x = "Sampling Variance")+
+  theme_classic()+ggtitle("Sampling variance plot") +theme(plot.title = element_text(hjust = 0.5))
+# Because there are some very high values, so we can limit the range of x-xias.
+# Recreate:
+ggplot(data_lnRR, aes(y = yi, x = vi)) + 
+  geom_point() + 
+  geom_smooth(method = lm) + 
+  labs(y = "Correlation Coefficient", x = "Sampling Variance")+ xlim(0,20)+
+  theme_classic()+ggtitle("Sampling variance plot") +theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# Including sampling variance as moderator
+metareg_v <- rma.mv(yi ~ vi, vi, 
+                    random = list(~1|study, 
+                                  ~1|residual), 
+                    test = "t", dfs = "contain", 
+                    data = data_lnRR)
+summary(metareg_v)
+
+# Explore how much variation about this model:
+r2 <- orchaRd::r2_ml(metareg_v)
+r2
+```
+
+```{r}
+# Sampling variance explained 2.8% of the effect size variance. This is marginal R2, which tells us how much variation "fixed effects" or moderators explain in the model. The conditional R2 tells us that the full model accounting for both fixed and random effects explains 12.8% of the variance in effect size.
+```
+
+```{r}
+# There is evidence of publication bias, as the slope estimates for vi are significant. From this model, we can see that when there is no uncertainty (that is, the intercept), the adjusted lnRR (yi) is 0.05 and the 95% confidence interval overlaps with zero (that is,95% CI = -0.3713 to 0.0865). In other words, if there was no uncertainty in the estimates, or if we had a very strong set of studies, then we would expect an average correlation of 0.05.
+```
+
+### 8.Time-lag plot assessing how effect sizes may or may not have changed through time.
+
+```{r yearbubble1,fig.align='center',fig.cap="Plot of r as a function of publication year (print). Points are scaled in relation to their precision (1/sqrt(vi). Small points indicate effects with low precision or high sampling varaince"}
+# Because there are two year dataset, actually the results are similar:
+# Year_print:
+ggplot(data_lnRR, aes(y = yi, x = year_print, size = 1/sqrt(vi))) + geom_point(alpha = 0.2) +
+    geom_smooth(method = lm, col = "red", show.legend = FALSE) + labs(x = "Publication Year",
+    y = "Correlation Coefficien(r)", size = "Precision (1/SE)") +
+    theme_classic()+ggtitle("Time-lag plot with publication year (print)") +theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r yearbubble2,fig.align='center',fig.cap="Plot of r as a function of publication year (online). Points are scaled in relation to their precision (1/sqrt(vi). Small points indicate effects with low precision or high sampling varaince"}
+# Year_online:
+ggplot(data_lnRR, aes(y = yi, x = year_online, size = 1/sqrt(vi))) + geom_point(alpha = 0.2) +
+    geom_smooth(method = lm, col = "red", show.legend = FALSE) + labs(x = "Publication Year",
+    y = "Correlation Coefficien(r)", size = "Precision (1/SE)") +
+    theme_classic()+ggtitle("Time-lag plot with publication year (online)") +theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# Explanation:
+# 1) There does appear to be a positive relationship with year.
+# 2) The earlier year studies have lower sampling variance (i.e., high precision). But the overall difference is small.
+# 3) These early studies appear to have a lower effect size compared with studies that are done in later years.
+```
+
+### 9.Formal meta-regression model that includes year as a moderator (fixed effect) to test for time-lag bias.
+
+```{r}
+# Including year as moderator
+metareg_time <- rma.mv(yi ~ year_online, vi, random = list(~1 | study, ~1 | residual),
+    test = "t", dfs = "contain", data = data_lnRR)
+summary(metareg_time)
+```
+
+```{r}
+# Explore how much variation does time when results were published:
+r2_time <- orchaRd::r2_ml(metareg_time)
+r2_time
+```
+
+```{r}
+# Time delay explained 2.48% of the variation in yi
+```
+
+### 10.Formal meta-regression model that includes inverse sampling variance (i.e., 1vlnRR) to test for file-drawer biases
+
+```{r}
+# Including sampling variance and year as moderators to account for both!
+metareg_time1 <- rma.mv(yi ~ year_online + vi, vi, random = list(~1 | study, ~1 | residual),
+    test = "t", dfs = "contain", data = data_lnRR)
+summary(metareg_time1)
+```
+
+```{r}
+# Explore how much variation does time when results were published:
+r2_time_sv <- orchaRd::r2_ml(metareg_time1)
+r2_time_sv
+```
+
+
+```{r}
+# Add ‘centered on the mean’ Year and call it 'year_c'
+#   ‘centre’ the Year variable
+data_lnRR2 <- data_lnRR %>%
+    mutate(year_c = year_online - mean(year_online))
+```
+
+```{r}
+# Including sampling variance and mean centered year as moderators to account:
+metareg_time_c <- rma.mv(yi ~ year_c + vi, vi, random = list(~1 | study, ~1 |
+    residual), test = "t", dfs = "contain", data = data_lnRR2)
+summary(metareg_time_c)
+```
+
+```{r}
+# The overall average correlation (r) is -0.1579 when controlling for small sample size and time delay deviation
+```
+
+### 11. A written paragraph that discusses the potential for publication bias based on the meta-regression results. What type of publication bias, if any, appears to be present in the data? If publication bias is present, what does it mean and what might be contributing to such bias?
+```{r}
+#Publication bias, or drawer problem, is a phenomenon that occurs in the academic publishing process. Publication bias occurs when the decision to publish a study is influenced by the findings of that study. Publication bias has a profoundly negative impact on literature analysis and meta-analysis, as published papers may thus focus on supporting or rejecting the findings. The reliance on the direction and strength of findings when researchers, reviewers or editors select papers for publication creates a bias that makes the publication process not a random event and therefore suppresses the publication of certain studies.
+
+#Funnel plots are the most common method of identifying publication bias in the Meta-analysis process and respond to estimates of the intervention effects of individual studies for a given sample size or precision. In the absence of bias, the points in the image should be clustered into an inverted funnel shape. If bias is present, the funnel plot has an asymmetrical appearance with gaps in the bottom corners of the graph. Based on the funnel plot obtained from our analysis above, we find a distinct blank area in the bottom right corner, with a positive correlation based on a very small sample size, from which these sample sizes usually vary from small to large in unpublished cases. The positive correlation for small sample sizes is not significant. This is a contributing factor to what we call funnel asymmetry, which shows a bunch of missing effect sizes in the lower left corner of the funnel. And by analysing the data we find an overall mean correlation coefficient (r) of -0.1579 controlling for small sample size and time lag bias. so we speculate that negative outcome bias occurs.
+
+#If there is publication bias, it means that the published studies are not sufficiently representative of the study population, which in turn triggers bias. In this study we presume a negative outcome bias, meaning that authors are more likely to submit or edit, or more likely to accept negative results rather than positive or inconclusive results.
+#Possible causes.
+#1. Sampling bias: Due to a number of limitations, it is difficult for researchers to obtain the full sample applicable to a research question when exploring an issue, usually by random sampling so that the sample obtained is as representative of the study population as possible, and then the relevant conclusions drawn from these samples may also not be representative. As a result, the meta-analysis is bound to be correspondingly biased in the results of the data analysis obtained when these studies are included.
+
+#2. Preference for significant results: In the field of academic research, usually only papers with significant findings are likely to be accepted and published by journals, which leads to a preference for significant results by researchers. Even when researchers do acknowledge the contribution of insignificant findings, the contribution of insignificant findings is often more questionable. The meta-analysis is therefore bound to be correspondingly biased in the results of the data analysis that results from the inclusion of these studies.
+
+#3. literature search was not comprehensive: If a meta-analysis researcher does not conduct a comprehensive literature search on a research question, this may also lead to problems of publication bias. Due to practical constraints, meta-analytical researchers are usually only able to retrieve a limited amount of literature on a particular research question. What the meta-analysis researcher can do is to search as much literature as possible in order to reduce publication bias.
+```
+
+
+### 12.Identify any studies contributing to publication bias. How do your updated meta-analysis results compare with a meta-analysis by Clement et. al. (2022)? Are there any concerns about these studies? If so, describe using references to existing papers what concerns have been raised?
+
+```{r}
+#Our study shows that, based on data from published studies of ocean acidification on fish behaviour in recent years, the overall bias is to the left, showing a decreasing effect according to the funnel plot we have drawn. By analysing the data, we found that the overall mean correlation coefficient (r) controlling for small sample size and time-lagged bias was -0.1579. We therefore hypothesised that a negative outcome bias had occurred.
+
+#Based on a systematic literature review and meta-analysis, Clement et al. found evidence for a declining effect of ocean acidification studies on fish behaviour. Typically, the magnitude of the effect in this area (absolute lnRR) has declined by an order of magnitude over the last decade.
+
+#This decline effect can be explained by many factors, including biology. It is shown that studies of ocean acidification on fish behaviour exhibit a declining effect that cannot be explained by 3 biological processes that are commonly considered to be important drivers of acidification effects. Three potential biases may be at play: (1) methodological bias; (2) selective publication bias; and (3) citation bias. The potential influence of authors/researchers in driving downward effects is then explored.
+
+#The findings suggest that the large effect of ocean acidification on fish behaviour is at least partly due to methodological factors in earlier studies (e.g. small sample sizes). In addition, the selective publication of large effect sizes by authors and journals, particularly in the early years of the field, and the continued high frequency of citations of these papers may have contributed to the proliferation and persistence of this idea. However, it is important to note that the low sample size and selective publication cannot fully explain the strong downward effect detected here, and other biases and processes may be at play .
+
+#Publication bias appears to be a widespread problem in the scientific literature and has been demonstrated in many areas of research. But the use of single studies and aspects of the design and execution of meta-analyses may increase the likelihood of such bias, and their occurrence may seriously distort any attempt to derive valid estimates by pooling data from a group of studies, biasing the results in favour of positive outcomes. Although various methods have been proposed to determine whether publication bias exists, and even to correct for it, they all have their limitations.
+
+#Therefore, the best option may be to stop it from happening in the first place, either by registering the existence of each trial, or by publishing all studies, regardless of the results. Before overcoming the problem of publication bias, all reviewers and readers should be aware that they may be looking at a biased sample of trial results and should adjust the strength of their conclusions accordingly. This is particularly true when using meta-analysis methods to study weak associations, in which the calculation of overall estimates has given the review an accuracy that may not always be guaranteed.
+```
